@@ -34,7 +34,7 @@ def fetch_from_notion():
     notion = Client(auth=token)
     nodes, edges = [], []
 
-    # Map data_source_id -> database_id for fallback
+    # Map data_source_id -> database_id for REST API fallback
     DS_TO_DB = {
         PAPERS_DS:   "fb33ed9c-8e3f-46da-99b9-86a96fea6a8e",
         CHUNKS_DS:   "c5399279-ff2e-4cd9-a902-a61c64843e69",
@@ -42,9 +42,29 @@ def fetch_from_notion():
         IDEAS_DS:    "8da01cfe-1cbd-4e4a-8083-a260e487d9a7",
     }
 
+    def query_all_rest(db_id):
+        """Fallback: query via Notion REST API directly"""
+        import httpx
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Notion-Version": "2022-06-28",
+            "Content-Type": "application/json",
+        }
+        pages, cursor = [], None
+        while True:
+            body = {"page_size": 100}
+            if cursor: body["start_cursor"] = cursor
+            r = httpx.post(f"https://api.notion.com/v1/databases/{db_id}/query",
+                           headers=headers, json=body, timeout=30)
+            r.raise_for_status()
+            data = r.json()
+            pages.extend(data["results"])
+            if not data["has_more"]: break
+            cursor = data["next_cursor"]
+        return pages
+
     def query_all(ds_id):
         pages, cursor = [], None
-        # Try data_sources.query first, fall back to databases.query
         try:
             while True:
                 kw = {"data_source_id": ds_id, "page_size": 100}
@@ -55,17 +75,9 @@ def fetch_from_notion():
                 cursor = resp["next_cursor"]
             return pages
         except Exception as e:
-            print(f"    data_sources.query failed ({e}), trying databases.query...")
-            pages, cursor = [], None
+            print(f"    data_sources.query failed ({e}), trying REST API...")
             db_id = DS_TO_DB.get(ds_id, ds_id)
-            while True:
-                kw = {"database_id": db_id, "page_size": 100}
-                if cursor: kw["start_cursor"] = cursor
-                resp = notion.databases.query(**kw)
-                pages.extend(resp["results"])
-                if not resp["has_more"]: break
-                cursor = resp["next_cursor"]
-            return pages
+            return query_all_rest(db_id)
 
     def get_title(props):
         for v in props.values():
